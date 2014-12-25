@@ -1,0 +1,15 @@
+= About this example project
+
+This branch of the OpenSCAD Template Project contains some example source files using a few of the features implemented by the makefile and the supporting scripts. Type `make` to build the project and test that everything has been set up correctly.
+
+
+== Source files
+
+This example project contains two SVG files. One, `example.svg`, contains three layers and is used by `example_1.scad`, which only uses the `text` layer, and `example_2.scad` which combines all three layers.
+
+The other SVG file, `template.svg`, contains an empty document with a page size of 10 by 10 cm, the document unit set to mm and a raster with minor grid lines at 1 mm and major grid lines at 5 mm. This file may be used as a starting point when using Inkscape to draw 2D shapes.
+
+
+== Generated source files
+
+The project contains a simple example on how to generate source files. When make is invoked, 5 OpenSCAD files are created in the directory `generated`. Each of this describes a cube with side lengths from 10 to 50 mm.
