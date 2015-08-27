@@ -2,65 +2,98 @@
 INKSCAPE := inkscape
 OPENSCAD := openscad
 PYTHON := python2
+ASYMPTOTE := asy
 
 # Settings affecting the compiled results. You can overwrite these in a file called settings.mk in the same directory as this makefile. See readme.creole.
 DXF_FLATNESS := 0.1
+FLAT_SCAD_FILES :=
+ASYMPTOTE_EXPORTED_SVG_FILES :=
 
-export INKSCAPE OPENSCAD DXF_FLATNESS
+# Non-file goals.
+.PHONY: all clean generated dxf stl asy pdf
 
+# Goal to build Everything. Also generates files which aren't compiled to anything else. Deined here to make it the default goal.
+all: generated dxf stl asy pdf
+
+# Include the configuration files.
+-include config.mk settings.mk
+
+# Command to run the Python scripts.
 PYTHON_CMD := PYTHONPATH="support:$$PYTHONPATH" $(PYTHON)
+INKSCAPE_CMD := INKSCAPE=$(INKSCAPE) DXF_FLATNESS=$(DXF_FLATNESS) $(PYTHON_CMD) -m inkscape  
+OPENSCAD_CMD := OPENSCAD=$(OPENSCAD) $(PYTHON_CMD) -m openscad
+ASYMPTOTE_CMD := ASYMPTOTE=$(ASYMPTOTE) $(PYTHON_CMD) -m asymptote
 
-# All visible files in the src directory. Ignore files whose names contain spaces.
-SRC_FILES := $(shell find src -not \( \( -name '.*' -or -name '* *' \) -prune \))
-SRC_SCAD_FILES := $(filter %.scad,$(SRC_FILES))
-SRC_SVG_FILES := $(filter %.svg,$(SRC_FILES))
+# Function with arguments (ext, subst_ext, names).
+# Takes a list of file names and returns all elements whose basename do not start with a `_' and which have extension ext. The returned names will have their extension replaced by subst_ext.
+filter_compiled = $(foreach i,$(patsubst %$1,%$2,$(filter %$1,$3)),$(if $(filter-out _%,$(notdir $i)),$i))
 
-# Run generate_scad.sh to get the names of all OpenSCAD files that should be generated using that same script.
-GENERATED_FILES := $(addsuffix .scad,$(basename $(shell ./generate_sources.sh)))
-GENERATED_SVG_FILES := $(filter %.svg, $(GENERATED_FILES))
-GENERATED_SCAD_FILES := $(filter %.scad, $(GENERATED_FILES))
+# Run generate_scad.sh to get the names of all files that should be generated using that same script.
+GENERATED_FILES := $(shell ./generate_sources.sh)
 
-# Source SVG files.
-SVG_FILES := $(SRC_SVG_FILES) $(GENERATED_SVG_FILES)
+# All visible files in the src directory that either exist or can be generated. Ignore files whose names contain spaces.
+SRC_FILES := $(sort $(GENERATED_FILES) $(shell find src -not \( \( -name '.*' -or -name '* *' \) -prune \) -type f))
 
-# Only OpenSCAD files whose names do not start with `_' are compiled to STL.
-COMPILED_SCAD_FILES := $(foreach i, $(SRC_SCAD_FILES) $(GENERATED_SCAD_FILES),$(if $(filter-out _%,$(notdir $(i))),$(i)))
+# STL files produced from OpenSCAD files.
+SCAD_STL_FILES := $(call filter_compiled,.scad,.stl,$(filter-out $(FLAT_SCAD_FILES),$(SRC_FILES)))
+
+# DXF files produced from OpenSCAD fiels. Ignore non-OpenSCAD files in FLAT_SCAD_FILES.
+SCAD_DXF_FILES := $(call filter_compiled,.scad,.dxf,$(filter $(FLAT_SCAD_FILES),$(SRC_FILES)))
+
+# DXF files produced from SVG files. This excludes SVG files that are exported to Asymptote Files. Also, ignores an SVG file, if the same DXF file can also be produced from an OpenSCAD file. This is just to get reproducable builds without aborting it.
+SVG_DXF_FILES := $(filter-out $(SCAD_DXF_FILES),$(call filter_compiled,.svg,.dxf,$(filter-out $(ASYMPTOTE_EXPORTED_SVG_FILES),$(SRC_FILES))))
+
+# Asymptote files produced from SVG files.
+SVG_ASY_FILES := $(call filter_compiled,.svg,.asy,$(filter $(ASYMPTOTE_EXPORTED_SVG_FILES),$(SRC_FILES)))
+
+# PDF files which can be generated from Asymptote files. We exclude SVG_ASY_FILES because they don't contain any drawing primitives and thus won't produce a PDF.
+ASY_PDF_FILES := $(call filter_compiled,.asy,.pdf,$(filter-out $(SVG_ASY_FILES),$(SRC_FILES)))
 
 # Makefiles which are generated while compiling to record dependencies.
-DEPENDENCY_FILES := $(patsubst %.scad,%.d,$(COMPILED_SCAD_FILES))
+DEPENDENCY_FILES := $(foreach i,.scad,$(call filter_compiled,$i,.d,$(filter-out $(SVG_ASY_FILES),$(SRC_FILES))))
 
-# All files that may be generated from the source files.
-STL_FILES := $(patsubst %.scad,%.stl,$(COMPILED_SCAD_FILES))
-DXF_FILES := $(patsubst %.svg,%.dxf,$(SVG_FILES))
+# Files that may be used from OpenSCAD files and thus must exist before OpenSCAD is called.
+SCAD_ORDER_DEPS := $(filter %.scad %.dxf,$(SRC_FILES)) $(SVG_DXF_FILES)
+
+# Files that may be used from Asymptote files.
+ASY_DEPS := $(filter %.asy,$(SRC_FILES)) $(SVG_ASY_FILES)
 
 # Dependencies which may affect the result of all build products.
 GLOBAL_DEPS := Makefile $(wildcard config.mk settings.mk)
 
-.PHONY: all clean generated dxf stl
-
-# Everything. Also generates files which aren't compiled to anything else.
-all: generated dxf stl
-
 # Everything^-1.
 clean:
-	rm -rf $(GENERATED_FILES) $(DXF_FILES) $(STL_FILES) $(DEPENDENCY_FILES)
+	rm -rf $(SVG_DXF_FILES) $(SCAD_DXF_FILES) $(SCAD_STL_FILES) $(SVG_ASY_FILES) $(ASY_PDF_FILES) $(GENERATED_FILES) $(DEPENDENCY_FILES)
 
-# Targets to build the project up to a specific step.
+# Goals to build the project up to a specific step.
 generated: $(GENERATED_FILES)
-dxf: $(DXF_FILES)
-stl: $(STL_FILES)
-
-# Include the local configuration file and the dependency files. Needs to be included after the `all' target has been defined.
--include config.mk settings.mk $(DEPENDENCY_FILES)
+dxf: $(SVG_DXF_FILES) $(SCAD_DXF_FILES)
+stl: $(SCAD_STL_FILES)
+pdf: $(ASY_PDF_FILES)
+asy: $(SVG_ASY_FILES)
 
 # Rule to convert an SVG file to a DXF file.
-%.dxf: %.svg $(GLOBAL_DEPS)
-	$(PYTHON_CMD) -m dxf_export $< $@
+$(SVG_DXF_FILES): %.dxf: %.svg $(GLOBAL_DEPS)
+	$(INKSCAPE_CMD) $< $@
 
-# Rule to compile an OpenSCAD file to an STL file. We require all DXF files to exist before an OpenSCAD file can be used to generate an STL file. Additional dependencies are read from the included makefiles generated during compiling.
-%.stl: %.scad $(GLOBAL_DEPS) | $(DXF_FILES)
-	$(PYTHON_CMD) -m openscad $< $@ $*.d
+$(SVG_ASY_FILES): %.asy: %.svg $(GLOBAL_DEPS)
+	$(INKSCAPE_CMD) $< $@
+
+# Rule to compile an OpenSCAD file to a DXF file.
+$(SCAD_DXF_FILES): %.dxf: %.scad $(GLOBAL_DEPS) | $(SCAD_ORDER_DEPS)
+	$(OPENSCAD_CMD) $< $@ $*.d
+
+# Rule to compile an OpenSCAD file to an STL file.
+$(SCAD_STL_FILES): %.stl: %.scad $(GLOBAL_DEPS) | $(SCAD_ORDER_DEPS)
+	$(OPENSCAD_CMD) $< $@ $*.d
+
+# Rule to export an SVG file to an Asymptote file.
+$(ASY_PDF_FILES): %.pdf: $(ASY_DEPS) $(GLOBAL_DEPS)
+	$(ASYMPTOTE_CMD) $*.asy $@
 
 # Rule for automaticaly generated OpenSCAD files.
 $(GENERATED_FILES): generate_sources.sh $(GLOBAL_DEPS)
 	./generate_sources.sh $@
+
+# Include dependency files produced by an earlier build.
+-include $(DEPENDENCY_FILES)
