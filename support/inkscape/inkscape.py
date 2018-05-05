@@ -106,8 +106,11 @@ class InkscapeCommandLine(object):
         # Inkscape 0.91 places a duplicated layer above (after) the selected
         # one and selects the new layer.
         new_layer = Layer(layer.inkscape_name + ' copy', layer.export_name, layer.use_paths)
-        self._current_layer_index += 1
-        self._layers.insert(self._current_layer_index, new_layer)
+        self._layers.insert(self._current_layer_index + 1, new_layer)
+        
+        # Whether the original or the new layer is selected after the operation
+        # fluctuates between Inkscape versions.
+        self._current_layer_index = None
         
         return new_layer
     
